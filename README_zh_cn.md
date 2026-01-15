@@ -179,6 +179,6 @@ lynexus/
 - **贡献者**：每位帮助改进Lynexus的人
 - **用户**：感谢信任我们的AI开发需求
 
-<div align="center"> <p> <strong>由AI社区🫶为AI社区打造</strong> </p> <p> <a href="https://forum.lynexus.ai">论坛</a> • <a href="https://solynacversion.github.io/LyNexus/zh-cn">文档</a> • <a href="https://github.com/SolynAcVersion/LyNexus/issues">问题反馈</a> • <a href="https://github.com/SolynAcVersion/LyNexus/discussions">讨论区</a> </p> </div>
+<div align="center"> <p> <strong>由AI社区🫶为AI社区打造</strong> </p> <p> <a href="https://forum.lynexus.ai">论坛</a> • <a href="https://solynacversion.github.io/LyNexus">文档</a> • <a href="https://github.com/SolynAcVersion/LyNexus/issues">问题反馈</a> • <a href="https://github.com/SolynAcVersion/LyNexus/discussions">讨论区</a> </p> </div>
 <p align="center"></p>
 <div align="center"> <i>如果觉得这个项目有用，请给它一个⭐吧！</i> </div>

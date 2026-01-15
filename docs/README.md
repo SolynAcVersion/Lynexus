@@ -1,5 +1,7 @@
 # Lynexus AI Assistant - Complete User Guide
 
+[简体中文](./zh-cn/README.md)
+
 ## 1. Normal Usage
 
 ### 1.1 Launching the Application
