@@ -33,6 +33,8 @@ class I18n:
                 "new_chat": "New Chat",
                 "clear_chat": "Clear Chat",
                 "export_chat": "Export Chat",
+                "delete_chat": "Delete Chat",
+                "stop": "Stop",
                 
                 # Dialogs
                 "initial_setup": "Initial Setup",
@@ -42,6 +44,10 @@ class I18n:
                 "start_lynexus": "Start Lynexus",
                 "load_config_file": "Load Config",
                 "import_config": "Load Config",
+                "confirm_delete": "Confirm Delete",
+                "confirm_delete_message": 'Are you sure you want to delete chat "{0}"?',
+                "warning": "Warning",
+                "cannot_switch_during_process": "Please wait for the current response to complete before switching conversations.",
                 
                 # Messages
                 "type_message": "Type your message here...",
@@ -67,6 +73,8 @@ class I18n:
                 "new_chat": "新建对话",
                 "clear_chat": "清空对话",
                 "export_chat": "导出对话",
+                "delete_chat": "删除聊天",
+                "stop": "停止",
                 
                 # Dialogs
                 "initial_setup": "初始设置",
@@ -76,6 +84,10 @@ class I18n:
                 "start_lynexus": "启动 Lynexus",
                 "load_config_file": "加载配置",
                 "import_config": "加载配置文件",
+                "confirm_delete": "确认删除",
+                "confirm_delete_message": '确定要删除聊天 "{0}" 吗？',
+                "warning": "警告",
+                "cannot_switch_during_process": "请等待当前响应完成后再切换对话。",
                 
                 # Messages
                 "type_message": "在此输入消息...",

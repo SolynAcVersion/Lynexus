@@ -146,6 +146,14 @@ class SettingsDialog(QWidget):
         model_layout.addWidget(self.frequency_spin, 4, 1)
         model_group.setLayout(model_layout)
         
+        self.stream_check = QCheckBox("Enable Streaming")
+        self.stream_check.setChecked(True)
+        self.stream_check.setToolTip("Enable real-time text streaming for responses")
+
+        model_layout.addWidget(QLabel("Stream Mode:"), 5, 0)
+        model_layout.addWidget(self.stream_check, 5, 1)
+        
+        
         # Command Configuration Group
         command_group = QGroupBox("Command Configuration")
         command_layout = QGridLayout()
@@ -350,6 +358,7 @@ class SettingsDialog(QWidget):
             
             # Model parameters - handle None values safely
             self.temp_spin.setValue(config.get('temperature', 1.0))
+            self.stream_check.setChecked(config.get('stream', True))  # 默认启用streaming
             
             max_tokens = config.get('max_tokens')
             if max_tokens is None:
@@ -409,6 +418,9 @@ class SettingsDialog(QWidget):
                 self.presence_spin.setValue(config['presence_penalty'])
             if 'frequency_penalty' in config:
                 self.frequency_spin.setValue(config['frequency_penalty'])
+                
+            if 'stream' in config:
+                self.stream_check.setChecked(config['stream'])
             
             # Command settings
             if 'command_start' in config:
@@ -482,6 +494,7 @@ class SettingsDialog(QWidget):
                 'top_p': self.top_p_spin.value(),
                 'presence_penalty': self.presence_spin.value(),
                 'frequency_penalty': self.frequency_spin.value(),
+                'stream': self.stream_check.isChecked(),
                 
                 # Command settings
                 'command_start': self.cmd_start_edit.text().strip(),

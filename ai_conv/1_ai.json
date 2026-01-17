@@ -1,0 +1,16 @@
+[
+  {
+    "role": "system",
+    "content": "You are a helpful AI assistant. Be concise and clear in your responses."
+  },
+  {
+    "role": "user",
+    "content": "你好啊",
+    "timestamp": "2026-01-17T10:49:36.250169"
+  },
+  {
+    "role": "assistant",
+    "content": "你好！有什么我可以帮助你的吗？",
+    "timestamp": "2026-01-17T10:49:37.967741"
+  }
+]

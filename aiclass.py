@@ -1,108 +1,137 @@
 # [file name]: aiclass.py
 """
-Lynexus AI Assistant - Main AI class with enhanced features:
-- Execution status tracking for status bar display
-- Direct configuration updates without creating new instances
-- Conversation history loading into AI context
-- All MCP paths remain as relative paths
+Lynexus AI Assistant - Complete version with proper history management
+保持所有原始功能，包括：
+1. 系统提示集成
+2. 完整的对话历史上下文
+3. 流式和非流式处理
+4. 命令执行迭代
+5. MCP工具加载
 """
 
-from datetime import datetime 
-import os 
+from datetime import datetime
+import os
 import sys
 import importlib.util
-from openai import OpenAI  
 import json
-from mcp_utils import MCPServerManager, load_mcp_conf, exec_mcp_tools
+from typing import List, Dict, Generator, Optional
+from openai import OpenAI
+from mcp_utils import MCPServerManager, load_mcp_conf
 
 
-# Main class of AI, encapsulated from ./console.py on 10/01/26
-# Enhanced on 15/01/26 with status tracking and config updates
 class AI:
-    def __init__(self, 
-                # Basic configuration for the model
-                mcp_paths=None, 
+    """
+    完整的AI助手类，支持流式、命令执行和完整历史管理
+    """
+    
+    def __init__(self,
+                # 基本配置
+                mcp_paths=None,
                 api_key=None,
                 api_base=None,
                 model=None,
-                
-                # System prompt
+
+                # 系统提示
                 system_prompt=None,
-                
-                # Model parameters
+
+                # 模型参数
                 temperature=1.0,
                 max_tokens=2048,
                 top_p=1.0,
                 stop=None,
-                stream=False,
+                stream=True,  # 默认流式
                 presence_penalty=0.0,
                 frequency_penalty=0.0,
-                
-                # Command parsing
+
+                # 命令解析
                 command_start="YLDEXECUTE:",
                 command_separator="￥|",
-                
-                
-                # Command execution
-                max_iterations=15):
-        """Initialize AI agent with enhanced features"""
-        
-        # Tool configuration - store relative paths
+
+                # 命令执行
+                max_iterations=15,
+
+                # 自定义提示词（可从设置对话框配置）
+                command_execution_prompt=None,
+                command_retry_prompt=None,
+                final_summary_prompt=None,
+                max_execution_iterations=3):
+
+        # 工具配置
         self.mcp_paths = mcp_paths or []
         self.funcs = {}
-        
-        
-        # API configuration
+
+        # API配置
         self.api_key = api_key
         self.api_base = api_base or 'https://api.deepseek.com'
         self.model = model or 'deepseek-chat'
         self.client = None
-        
-        # Command configuration
+
+        # 命令配置
         self.command_start = command_start
         self.command_separator = command_separator
         self.max_iterations = max_iterations
-        
-        # Model parameters
+
+        # 自定义提示词（从配置或使用默认值）
+        self.command_execution_prompt = command_execution_prompt or (
+            "Execution result: {result}\n\n"
+            "CRITICAL INSTRUCTION: If the task is COMPLETE, provide a FINAL SUMMARY in Chinese and then STOP - "
+            "do NOT execute any more commands. Only execute another command if this result shows the task is incomplete "
+            "and you have a clear next step."
+        )
+
+        self.command_retry_prompt = command_retry_prompt or (
+            "Execution failed: {error}\n\n"
+            "Please analyze the error and retry with a corrected command, or provide an alternative solution."
+        )
+
+        self.final_summary_prompt = final_summary_prompt or (
+            "Based on all the execution results, please provide a FINAL SUMMARY in Chinese of what was found or accomplished. "
+            "This is the FINAL request - after this summary, do NOT execute any more commands. "
+            "Just provide the summary and stop."
+        )
+
+        self.max_execution_iterations = max_execution_iterations
+
+        # 模型参数
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.top_p = top_p
         self.stop = stop
-        self.stream = stream
+        self.stream = stream  # 存储流式参数
         self.presence_penalty = presence_penalty
         self.frequency_penalty = frequency_penalty
+
+        # 系统提示 - 使用完整的系统提示
+        self.system_prompt = system_prompt or self.get_complete_system_prompt()
         
-        # System prompt - command_start and command_separator are now initialized
-        self.system_prompt = system_prompt or self.get_default_system_prompt()
-        
-        # Conversation history
+        # 内部对话历史 - 由外部管理，但这里保留用于处理
         self.conv_his = []
         
-        # Execution status tracking for status bar display
+        # 执行状态跟踪
         self.execution_status = {
-            "status": "idle",  # idle, executing_tool, processing
+            "status": "idle",
             "tool_name": None,
             "tool_args": None,
             "start_time": None
         }
         
-        # Initialize stop flag
+        # 停止标志
         self._stop_flag = False
         
-        # Initialize AI client first
+        # 初始化AI客户端
         self.init_ai_client()
         
-        # Load MCP tools (default tools will be added in load_mcp_tools if needed)
+        # 加载MCP工具
         self.load_mcp_tools()
         
-        # Reset conversation history
+        # 重置对话历史（添加系统提示）
         self.reset_conversation()
         
-        print(f"[Info] AI initialized with {len(self.funcs)} tools")
+        print(f"[AI] 初始化完成，加载了 {len(self.funcs)} 个工具，stream={self.stream}")
     
-    def get_default_system_prompt(self):
-        """Return default system prompt"""
-        default_prompt = f"""
+    def get_complete_system_prompt(self):
+        """返回完整的系统提示"""
+        return f"""
 You are an AI assistant that can directly execute commands and call available tools.
 
 【Core Principles】
@@ -161,29 +190,11 @@ Wrong: {self.command_start} echo {self.command_separator} content {self.command_
 
 Please strictly follow these rules to ensure responses are concise, accurate, and meet actual user needs.
 """
-        return default_prompt
-
-
-    def set_stop_flag(self, value: bool):
-        """Set stop flag for interrupting execution."""
-        self._stop_flag = value
-        if value:
-            # 如果设置为True，更新执行状态
-            self.execution_status = {
-                "status": "idle",
-                "tool_name": None,
-                "tool_args": None,
-                "start_time": None
-            }
-            print(f"[Info] Stop flag set to True, execution interrupted")
-        
-    def get_stop_flag(self):
-        """Get current stop flag value."""
-        return self._stop_flag
-
+    
+    # === MCP工具加载 ===
     
     def load_mcp_mod(self, mcp_path):
-        """Load one MCP file (*.json or *.py)"""
+        """加载一个MCP文件(*.json或*.py)"""
         try:
             if mcp_path.endswith('.json'):
                 mcp_manager = MCPServerManager()
@@ -211,19 +222,18 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                 class MCPModule:
                     def __init__(self):
                         self.manager = mcp_manager
-                return MCPModule(), funcs             
+                return MCPModule(), funcs
                         
             else:
-                # Python file
+                # Python文件
                 module_name = os.path.basename(mcp_path).replace('.py', '')
                 spec = importlib.util.spec_from_file_location(module_name, mcp_path)
                 if spec is None:
-                    raise ImportError(f"[Warning] Cannot load module from {mcp_path}")
+                    raise ImportError(f"Cannot load module from {mcp_path}")
                 
                 mcp_module = importlib.util.module_from_spec(spec)
                 sys.modules[module_name] = mcp_module
-                spec.loader.exec_module(mcp_module)  
-                print(f"[Info] Successfully loaded {module_name}")
+                spec.loader.exec_module(mcp_module)
                 
                 funcs = {}
                 for attr_name in dir(mcp_module):
@@ -236,58 +246,28 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
         except Exception as e:
             print(f"[Warning] Load failed: {e}")
             return None, {}
-
-    def load_mult_mcp_mod(self, mcp_paths):
-        """Load multiple MCP files"""
-        all_funcs = {}
-        all_mods = []
-        
-        for path in mcp_paths:
-            mod, funcs = self.load_mcp_mod(path)
-            if mod:
-                all_mods.append(mod)
-            if funcs:
-                for func_name, func in funcs.items():
-                    if func_name in all_funcs:
-                        print(f"[Warning] Function '{func_name}' exists in multiple MCP files, will use the last loaded version")
-                    all_funcs[func_name] = func
-        return all_mods, all_funcs
     
     def load_mcp_tools(self):
-        """Load MCP tools from paths"""
+        """从路径加载MCP工具"""
         if not self.mcp_paths:
             print("[Info] No MCP paths provided, skipping tool loading")
             return
         
-        # Check if default tools exist and add them
+        # 检查默认工具
         default_tools = []
-        
-        # Check for OCR tool - using relative path
         ocr_path = "./tools/ocr.py"
-        if os.path.exists(ocr_path):
-            default_tools.append(ocr_path)
-        else:
-            print(f"[Warning] OCR tool not found at {ocr_path}")
-            
-        # Check for MCP config - using relative path
         mcp_config_path = "./tools/mcp_config.json"
-        if os.path.exists(mcp_config_path):
-            default_tools.append(mcp_config_path)
-        else:
-            print(f"[Warning] MCP config not found at {mcp_config_path}")
-            
-        # Add default tools to paths if not already present
-        for tool_path in default_tools:
-            if tool_path not in self.mcp_paths:
+        
+        for tool_path in [ocr_path, mcp_config_path]:
+            if os.path.exists(tool_path) and tool_path not in self.mcp_paths:
                 self.mcp_paths.append(tool_path)
                 print(f"[Info] Added default tool: {tool_path}")
         
-        # Verify paths exist - all paths remain as provided (relative or absolute)
+        # 验证路径
         valid_paths = []
         for path in self.mcp_paths:
-            # Try to resolve relative path
+            # 尝试解析相对路径
             if not os.path.isabs(path) and not os.path.exists(path):
-                # Try relative to current directory
                 resolved_path = os.path.join(os.getcwd(), path)
                 if os.path.exists(resolved_path):
                     valid_paths.append(resolved_path)
@@ -304,61 +284,58 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
         
         print(f"[Info] Will load {len(valid_paths)} MCP files")
         
-        # Load valid MCP files
+        # 加载有效的MCP文件
         _, self.funcs = self.load_mult_mcp_mod(valid_paths)
         
-        # Debug information
-        print(f"[Debug] Loaded {len(self.funcs)} functions")
-        if self.funcs:
-            print(f"[Debug] Function list: {list(self.funcs.keys())}")
-        
-        # Generate tool descriptions and update system prompt
+        # 生成工具描述并更新系统提示
         if self.funcs:
             tools_desc = self.gen_tools_desc()
             current_prompt = self.system_prompt
             
-            # Add tools description to the beginning of system prompt
+            # 将工具描述添加到系统提示开头
             self.system_prompt = tools_desc + '\n\n' + current_prompt
             self.update_system_prompt(self.system_prompt)
             print("[Info] Updated system prompt with tool descriptions")
     
-    def add_mcp_mods(self, valid_paths):
-        """Add additional MCP files to the AI agent"""
-        _, funcs = self.load_mult_mcp_mod(valid_paths)
-        self.funcs.update(funcs)
+    def load_mult_mcp_mod(self, mcp_paths):
+        """加载多个MCP文件"""
+        all_funcs = {}
+        all_mods = []
         
-        if funcs:
-            tools_desc = "You can use the following tools to operate files:\n"
-            for func_name, func in funcs.items():
-                doc = func.__doc__ or "No description"
-                tools_desc += f"- {func_name}: {doc}\n"
-            
-            # Update system prompt with new tools
-            current_prompt = self.system_prompt
-            self.system_prompt = tools_desc + '\n\n' + current_prompt
-            self.update_system_prompt(self.system_prompt)
+        for path in mcp_paths:
+            mod, funcs = self.load_mcp_mod(path)
+            if mod:
+                all_mods.append(mod)
+            if funcs:
+                for func_name, func in funcs.items():
+                    if func_name in all_funcs:
+                        print(f"[Warning] Function '{func_name}' exists in multiple MCP files, will use the last loaded version")
+                    all_funcs[func_name] = func
+        return all_mods, all_funcs
     
     def gen_tools_desc(self):
-        """Generate tools description"""
+        """生成工具描述"""
         if not self.funcs:
             return ""
         
         desc = "You can use the following tools:\n"
         for func_name, func in self.funcs.items():
             doc = func.__doc__ or "No description"
-            # Truncate long descriptions
+            # 截断长描述
             if len(doc) > 150:
                 doc = doc[:150] + "..."
             desc += f"- {func_name}: {doc}\n"
         
-        # Add usage example
+        # 添加使用示例
         desc += f"\nUsage example: {self.command_start} tool_name {self.command_separator} param1 {self.command_separator} param2\n"
         return desc
     
+    # === 核心方法 ===
+    
     def init_ai_client(self):
-        """Initialize AI client"""
+        """初始化AI客户端"""
         if not self.api_key:
-            # Try various environment variables
+            # 尝试各种环境变量
             self.api_key = os.environ.get("DEEPSEEK_API_KEY") or \
                           os.environ.get("OPENAI_API_KEY") or \
                           os.environ.get("ANTHROPIC_API_KEY")
@@ -372,182 +349,24 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
         )
         print(f"[Info] API client initialized with model: {self.model}")
     
-    # ============ Configuration Update Methods ============
+    def set_stop_flag(self, value: bool):
+        """设置停止标志"""
+        self._stop_flag = value
+        if value:
+            self.execution_status = {
+                "status": "idle",
+                "tool_name": None,
+                "tool_args": None,
+                "start_time": None
+            }
+            print(f"[Info] Stop flag set to True, execution interrupted")
     
-    def update_system_prompt(self, new_prompt):
-        """Update system prompt"""
-        self.system_prompt = new_prompt
-        for i, msg in enumerate(self.conv_his):
-            if msg.get("role") == "system":
-                self.conv_his[i]["content"] = new_prompt
-                break
-        else:
-            self.conv_his.insert(0, {"role": "system", "content": new_prompt})
-    
-    def update_temperature(self, temperature):
-        """Update temperature parameter (0.0-2.0)"""
-        self.temperature = temperature
-    
-    def update_model_params(self, **kwargs):
-        """Batch update model parameters"""
-        valid_params = ['max_tokens', 'top_p', 'stop', 'stream', 
-                       'presence_penalty', 'frequency_penalty']
-        for key, value in kwargs.items():
-            if key in valid_params:
-                setattr(self, key, value)
-            else:
-                print(f"[Warning] Invalid parameter: {key}")
-    
-    def update_api_config(self, api_key=None, api_base=None, model=None):
-        """Update API configuration"""
-        if api_key:
-            self.api_key = api_key
-        if api_base:
-            self.api_base = api_base
-        if model:
-            self.model = model
-        self.init_ai_client()
-    
-    def update_command_config(self, command_start=None, command_separator=None):
-        """Update command execution configuration"""
-        if command_start:
-            self.command_start = command_start
-        if command_separator:
-            self.command_separator = command_separator
-        
-        # Re-generate system prompt with new command config
-        self.system_prompt = self.get_default_system_prompt()
-        self.update_system_prompt(self.system_prompt)
-    
-    def update_max_iterations(self, max_iterations):
-        """Update maximum execution iterations"""
-        self.max_iterations = max_iterations
-    
-    def update_config(self, config_dict):
-        """Update configuration from dictionary without creating new instance"""
-        print(f"[Info] Updating AI configuration for existing instance")
-        
-        # Update API configuration if provided
-        if 'api_key' in config_dict and config_dict['api_key']:
-            self.api_key = config_dict['api_key']
-        
-        if 'api_base' in config_dict and config_dict['api_base']:
-            self.api_base = config_dict['api_base']
-        
-        if 'model' in config_dict and config_dict['model']:
-            self.model = config_dict['model']
-            
-        # Reinitialize client if API config changed
-        if any(key in config_dict for key in ['api_key', 'api_base', 'model']):
-            self.init_ai_client()
-        
-        # Update model parameters
-        if 'temperature' in config_dict:
-            self.temperature = config_dict['temperature']
-        
-        if 'max_tokens' in config_dict:
-            self.max_tokens = config_dict['max_tokens']
-        
-        if 'top_p' in config_dict:
-            self.top_p = config_dict['top_p']
-        
-        if 'stop' in config_dict:
-            self.stop = config_dict['stop']
-        
-        if 'stream' in config_dict:
-            self.stream = config_dict['stream']
-        
-        if 'presence_penalty' in config_dict:
-            self.presence_penalty = config_dict['presence_penalty']
-        
-        if 'frequency_penalty' in config_dict:
-            self.frequency_penalty = config_dict['frequency_penalty']
-        
-        # Update command configuration
-        if 'command_start' in config_dict:
-            self.command_start = config_dict['command_start']
-        
-        if 'command_separator' in config_dict:
-            self.command_separator = config_dict['command_separator']
-        
-        if 'max_iterations' in config_dict:
-            self.max_iterations = config_dict['max_iterations']
-        
-        # Update system prompt
-        if 'system_prompt' in config_dict and config_dict['system_prompt']:
-            self.system_prompt = config_dict['system_prompt']
-            self.update_system_prompt(self.system_prompt)
-        
-        # Update MCP paths and reload tools if changed
-        if 'mcp_paths' in config_dict:
-            new_paths = config_dict['mcp_paths']
-            if set(new_paths) != set(self.mcp_paths):
-                print(f"[Info] MCP paths changed, reloading tools")
-                self.mcp_paths = new_paths
-                self.load_mcp_tools()
-        
-        print(f"[Info] Configuration updated successfully")
-    
-    # ============ Configuration Get Methods ============
-    
-    def get_config(self):
-        """Get current configuration dictionary"""
-        return {
-            # API config
-            "api_base": self.api_base,
-            "model": self.model,
-            
-            # Prompt config
-            "system_prompt": self.system_prompt,
-            
-            # Model parameters
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "top_p": self.top_p,
-            "stop": self.stop,
-            "stream": self.stream,
-            "presence_penalty": self.presence_penalty,
-            "frequency_penalty": self.frequency_penalty,
-            
-            # Command execution config
-            "command_start": self.command_start,
-            "command_separator": self.command_separator,
-            "max_iterations": self.max_iterations,
-            
-            # Tool config
-            "mcp_paths": self.mcp_paths.copy(),
-            "available_tools": list(self.funcs.keys())
-        }
-    
-    def get_execution_status(self):
-        """Get current execution status for status bar display"""
-        return self.execution_status.copy()
-
-    def reset_conversation(self):
-        """Clear conversation history"""
-        self.conv_his = [{"role": "system", "content": self.system_prompt}]
-    
-    def load_conversation_history(self, history_messages):
-        """Load conversation history into AI context"""
-        print(f"[Info] Loading {len(history_messages)} conversation history messages")
-        
-        # Reset conversation first
-        self.reset_conversation()
-        
-        # Add history messages to conversation
-        for msg in history_messages:
-            role = "user" if msg.get("is_sender", False) else "assistant"
-            content = msg.get("text", "")
-            
-            # Skip empty messages
-            if content and content.strip():
-                self.conv_his.append({"role": role, "content": content})
-        
-        print(f"[Info] Conversation history loaded. Total messages: {len(self.conv_his)}")
+    def get_stop_flag(self):
+        """获取当前停止标志值"""
+        return self._stop_flag
     
     def exec_func(self, func_name, *args):
-        """Execute functions called by AI agents with status tracking and stop flag support"""
-        # 检查停止标志
+        """执行函数，带状态跟踪和停止标志支持"""
         if self.get_stop_flag():
             return "Execution interrupted by user"
         
@@ -555,7 +374,7 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
             return f"Error: Function '{func_name}' does not exist"
         
         try:
-            # Update execution status for status bar display
+            # 更新执行状态
             self.execution_status = {
                 "status": "executing_tool",
                 "tool_name": func_name,
@@ -565,9 +384,8 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
             
             print(f"[Debug] Executing function: {func_name} with args: {args}")
             
-            # 在执行前再次检查停止标志
+            # 检查停止标志
             if self.get_stop_flag():
-                # Reset execution status
                 self.execution_status = {
                     "status": "stopped",
                     "tool_name": None,
@@ -576,6 +394,7 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                 }
                 return "Execution interrupted by user before execution"
             
+            # 处理MCP函数
             if func_name.startswith('mcp_'):
                 kwargs = {}
                 for arg in args:
@@ -587,7 +406,7 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                 
                 print(f"[Debug] Calling MCP function with kwargs: {kwargs}")
                 
-                # 在执行前再次检查停止标志
+                # 检查停止标志
                 if self.get_stop_flag():
                     self.execution_status = {
                         "status": "stopped",
@@ -601,7 +420,7 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
             else:
                 print(f"[Debug] Calling regular function with args: {args}")
                 
-                # 在执行前再次检查停止标志
+                # 检查停止标志
                 if self.get_stop_flag():
                     self.execution_status = {
                         "status": "stopped",
@@ -611,11 +430,23 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                     }
                     return "Execution interrupted by user before function execution"
                 
-                res = self.funcs[func_name](*args)
+                # 尝试执行函数，如果参数错误，提供更多信息
+                try:
+                    res = self.funcs[func_name](*args)
+                except TypeError as e:
+                    # 获取函数签名
+                    import inspect
+                    func = self.funcs[func_name]
+                    sig = inspect.signature(func)
+                    expected_args = list(sig.parameters.keys())
+                    
+                    error_msg = f"Parameter error: {e}\nExpected parameters: {expected_args}"
+                    print(f"[Error] {error_msg}")
+                    return f"Execution failed: {error_msg}"
             
             print(f"[Debug] Function execution result: {res[:100]}..." if len(str(res)) > 100 else f"[Debug] Function execution result: {res}")
             
-            # Reset execution status
+            # 重置执行状态
             self.execution_status = {
                 "status": "idle",
                 "tool_name": None,
@@ -624,10 +455,11 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
             }
             
             return f"Execution successful: {res}"
+        
         except Exception as e:
             print(f"[Error] Function execution failed: {e}")
             
-            # Reset execution status even on error
+            # 重置执行状态
             self.execution_status = {
                 "status": "idle",
                 "tool_name": None,
@@ -636,46 +468,155 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
             }
             
             return f"Execution failed: {e}"
-    
+            
+    def process_user_input_with_history(self, user_input: str, external_history: List[Dict] = None) -> str:
+        """
+        Process user input with external history
+        Returns AI's complete response with proper command execution handling
         
-
-    def process_user_inp(self, user_inp, max_iter=None):
-        """处理用户输入"""
-        if not user_inp:
-            return "", False
-
-        max_iter = max_iter or self.max_iterations
+        Args:
+            user_input: The user's input message
+            external_history: External conversation history (optional)
         
-        # 检查停止标志
-        if self.get_stop_flag():
-            # 重置停止标志
-            self.set_stop_flag(False)
-            # 重置执行状态
-            self.execution_status = {
-                "status": "idle",
-                "tool_name": None,
-                "tool_args": None,
-                "start_time": None
-            }
-            return "**Execution stopped**\nProcessing was interrupted by user.", True
+        Returns:
+            str: AI's complete response
+        """
+        # Use external history if provided, otherwise use internal history
+        if external_history:
+            current_history = external_history.copy()
+        else:
+            current_history = self.conv_his.copy()
         
-        # 重置执行状态为处理中
-        self.execution_status = {
-            "status": "processing",
-            "tool_name": None,
-            "tool_args": None,
-            "start_time": datetime.now().isoformat()
-        }
+        # Ensure system prompt is at the beginning
+        if not current_history or current_history[0].get("role") != "system":
+            current_history.insert(0, {"role": "system", "content": self.system_prompt})
         
-        # 添加用户输入到对话历史
-        self.conv_his.append({"role": "user", "content": user_inp})
+        # Add user input to history
+        current_history.append({"role": "user", "content": user_input})
         
-        for step in range(max_iter):
-            # 检查停止标志
+        iteration = 0
+        full_response = ""
+        
+        print(f"[AI] Processing with history (length: {len(current_history)}), iteration limit: {self.max_iterations}")
+        
+        while iteration < self.max_iterations:
             if self.get_stop_flag():
-                print(f"[Info] Stop flag detected, stopping execution at step {step+1}")
+                self.set_stop_flag(False)
+                self.execution_status = {
+                    "status": "idle",
+                    "tool_name": None,
+                    "tool_args": None,
+                    "start_time": None
+                }
+                return "**Execution stopped**\nProcessing was interrupted by user."
+            
+            try:
+                # Prepare API parameters
+                api_params = {
+                    "model": self.model,
+                    "temperature": self.temperature,
+                    "messages": current_history,
+                    "stream": False  # Non-streaming for internal processing
+                }
                 
-                # 重置执行状态
+                # Add optional parameters
+                optional_params = {
+                    "max_tokens": self.max_tokens,
+                    "top_p": self.top_p,
+                    "stop": self.stop,
+                    "presence_penalty": self.presence_penalty,
+                    "frequency_penalty": self.frequency_penalty
+                }
+                
+                for param, value in optional_params.items():
+                    if value is not None:
+                        api_params[param] = value
+                
+                print(f"[AI] Sending request to API with {len(current_history)} messages (iteration {iteration + 1})")
+                
+                # Execute API call
+                response = self.client.chat.completions.create(**api_params)
+                get_reply = response.choices[0].message.content
+                full_response += get_reply
+                
+                print(f"[AI] Received reply: {get_reply[:100]}..." if len(get_reply) > 100 else f"[AI] Received reply: {get_reply}")
+                
+                # Check if AI wants to execute a command
+                if get_reply.startswith(self.command_start):
+                    print(f"\n[AI][Iteration {iteration + 1}] Command detected: {get_reply}")
+                    
+                    # Add AI reply to history
+                    current_history.append({"role": "assistant", "content": get_reply})
+                    
+                    # Parse command - extract ONLY the first command
+                    # Sometimes AI outputs multiple commands in one response
+                    command_line = get_reply
+                    
+                    # If there are multiple commands, take only the first one
+                    if '\n' in get_reply:
+                        lines = get_reply.split('\n')
+                        for line in lines:
+                            if line.startswith(self.command_start):
+                                command_line = line
+                                break
+                    
+                    # Parse the command
+                    tokens = command_line.replace(self.command_start, "").strip().split(self.command_separator)
+                    tokens = [t.strip() for t in tokens if t.strip()]
+                    
+                    if len(tokens) < 1:
+                        res = "Error: Command format is incorrect. Please use: {command_start} tool_name {command_separator} param1 {command_separator} param2"
+                    else:
+                        func_name = tokens[0]
+                        args = tokens[1:] if len(tokens) > 1 else []
+                        
+                        print(f"[AI] Executing command: {func_name} with args: {args}")
+                        
+                        # Execute function
+                        res = self.exec_func(func_name, *args)
+                    
+                    print(f"[AI] Command execution result: {res[:200]}...")
+                    
+                    # Check if command exists
+                    if "does not exist" in res or "Error: Function" in res:
+                        # Command doesn't exist - add feedback and let AI try again
+                        error_feedback = f"Tool '{func_name}' is not available. Please use only available tools from the list provided in the system prompt."
+                        current_history.append({
+                            "role": "user",
+                            "content": error_feedback
+                        })
+                        
+                        # Add a small delay to prevent rapid retries
+                        import time
+                        time.sleep(0.5)
+                        
+                        iteration += 1
+                        continue
+                    
+                    # Add execution result to history with guidance
+                    current_history.append({
+                        "role": "user",
+                        "content": f"Execution result: {res}\n\nBased on this result, please decide the next step. If the task is complete or the command failed, provide a final summary in Chinese of what was accomplished or found."
+                    })
+                    
+                    iteration += 1
+                    
+                else:
+                    # No command, processing is complete
+                    current_history.append({"role": "assistant", "content": get_reply})
+                    self.execution_status = {
+                        "status": "idle",
+                        "tool_name": None,
+                        "tool_args": None,
+                        "start_time": None
+                    }
+                    
+                    return full_response
+                    
+            except Exception as e:
+                print(f"[AI] Error processing user input: {e}")
+                
+                # Reset execution status
                 self.execution_status = {
                     "status": "idle",
                     "tool_name": None,
@@ -683,18 +624,58 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                     "start_time": None
                 }
                 
-                # 重置停止标志
+                return f"Error occurred during processing: {e}"
+        
+        # Reached maximum iterations
+        self.execution_status = {
+            "status": "idle",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": None
+        }
+        
+        return f"{full_response}\n\n[Note: Reached maximum execution steps ({self.max_iterations}), task may not be fully completed]"
+
+
+    def _process_with_history(self, user_input: str, history: List[Dict]) -> str:
+        """使用指定历史处理用户输入"""
+        if self.get_stop_flag():
+            self.set_stop_flag(False)
+            return "**Execution stopped**\nProcessing was interrupted by user."
+        
+        # 设置处理状态
+        self.execution_status = {
+            "status": "processing",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": datetime.now().isoformat()
+        }
+        
+        # 添加用户输入到历史
+        history.append({"role": "user", "content": user_input})
+        
+        iteration = 0
+        full_response = ""
+        
+        while iteration < self.max_iterations:
+            if self.get_stop_flag():
+                print(f"[Info] Stop flag detected, stopping execution at iteration {iteration}")
+                self.execution_status = {
+                    "status": "idle",
+                    "tool_name": None,
+                    "tool_args": None,
+                    "start_time": None
+                }
                 self.set_stop_flag(False)
-                
-                return "**Execution stopped**\nProcessing was interrupted by user.", True
+                return "**Execution stopped**\nProcessing was interrupted by user."
             
             try:
                 # 准备API参数
                 api_params = {
                     "model": self.model,
                     "temperature": self.temperature,
-                    "messages": self.conv_his,
-                    "stream": self.stream
+                    "messages": history,
+                    "stream": False  # 非流式用于内部处理
                 }
                 
                 # 添加可选参数
@@ -710,14 +691,15 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                     if value is not None:
                         api_params[param] = value
                 
-                print(f"[Debug] Sending request to API with {len(self.conv_his)} messages")
+                print(f"[Debug] Sending request to API with {len(history)} messages (iteration {iteration + 1})")
                 
                 # 执行API调用
                 response = self.client.chat.completions.create(**api_params)
                 get_reply = response.choices[0].message.content
+                full_response += get_reply
+                
                 print(f"[Debug] Received reply: {get_reply[:100]}..." if len(get_reply) > 100 else f"[Debug] Received reply: {get_reply}")
                 
-                # 检查停止标志
                 if self.get_stop_flag():
                     self.execution_status = {
                         "status": "idle",
@@ -726,14 +708,423 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                         "start_time": None
                     }
                     self.set_stop_flag(False)
-                    return "**Execution stopped**\nProcessing was interrupted by user.", True
+                    return "**Execution stopped**\nProcessing was interrupted by user."
                 
-                # 检查AI是否要执行命令
                 if get_reply.startswith(self.command_start):
-                    print(f"\n[Step {step + 1}][AI requested execution] {get_reply}")
+                    print(f"\n[Iteration {iteration + 1}][AI requested execution] {get_reply}")
+                    
+                    # 添加AI回复到历史
+                    history.append({"role": "assistant", "content": get_reply})
                     
                     # 解析命令
                     tokens = get_reply.replace(self.command_start, "").strip().split(self.command_separator)
+                    tokens = [t.strip() for t in tokens]
+                    
+                    if len(tokens) < 1:
+                        res = "Error! Your command format is incorrect"
+                    else:
+                        func_name = tokens[0]
+                        args = tokens[1:] if len(tokens) > 1 else []
+                        
+                        if self.get_stop_flag():
+                            self.execution_status = {
+                                "status": "idle",
+                                "tool_name": None,
+                                "tool_args": None,
+                                "start_time": None
+                            }
+                            self.set_stop_flag(False)
+                            return "**Execution stopped**\nProcessing was interrupted by user."
+                        
+                        # 执行函数
+                        res = self.exec_func(func_name, *args)
+                    
+                    print(f"[Info] AI execution result: {res}")
+                    
+                    if self.get_stop_flag():
+                        self.execution_status = {
+                            "status": "idle",
+                            "tool_name": None,
+                            "tool_args": None,
+                            "start_time": None
+                        }
+                        self.set_stop_flag(False)
+                        return "**Execution stopped**\nProcessing was interrupted by user."
+                    
+                    # 添加执行结果到历史
+                    history.append({
+                        "role": "user", 
+                        "content": f"Execution result: {res}\nPlease decide the next operation based on this result. If the task is complete, please summarize and tell me the result."
+                    })
+                    
+                    iteration += 1
+                    
+                else:
+                    # 没有命令，完成处理
+                    history.append({"role": "assistant", "content": get_reply})
+                    self.execution_status = {
+                        "status": "idle",
+                        "tool_name": None,
+                        "tool_args": None,
+                        "start_time": None
+                    }
+                    
+                    return full_response
+                    
+            except Exception as e:
+                print(f"[Error] Error processing user input: {e}")
+                
+                if self.get_stop_flag():
+                    self.set_stop_flag(False)
+                    self.execution_status = {
+                        "status": "idle",
+                        "tool_name": None,
+                        "tool_args": None,
+                        "start_time": None
+                    }
+                    return "**Execution stopped**\nProcessing was interrupted by user."
+                
+                self.execution_status = {
+                    "status": "idle",
+                    "tool_name": None,
+                    "tool_args": None,
+                    "start_time": None
+                }
+                
+                return f"Error occurred during processing: {e}"
+        
+        # 达到最大迭代次数
+        self.execution_status = {
+            "status": "idle",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": None
+        }
+        
+        return f"{full_response}\n\n[Note: Reached maximum execution steps ({self.max_iterations}), task may not be fully completed]"
+    
+    # === 流式处理 ===
+    def process_user_input_stream(self, user_input: str, conversation_history: List[Dict], callback=None):
+        """流式处理用户输入 - 修复版本，支持命令执行"""
+        print(f"[AI] Starting stream processing for: {user_input[:50]}...")
+        
+        if self.get_stop_flag():
+            self.set_stop_flag(False)
+            if callback:
+                callback("**Execution stopped**\nProcessing was interrupted by user.")
+            else:
+                yield "**Execution stopped**\nProcessing was interrupted by user."
+            return
+        
+        # 设置处理状态
+        self.execution_status = {
+            "status": "processing",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": datetime.now().isoformat()
+        }
+        
+        # 创建历史副本
+        history = conversation_history.copy()
+        
+        # 确保系统提示
+        if not history or history[0].get("role") != "system":
+            history.insert(0, {"role": "system", "content": self.system_prompt})
+        
+        # 添加用户输入
+        history.append({"role": "user", "content": user_input})
+
+        iteration = 0
+        full_response = ""
+        summary_requested = False  # Flag to track if we've already requested a summary
+
+        while iteration < self.max_iterations:
+            if self.get_stop_flag():
+                self.execution_status = {
+                    "status": "idle",
+                    "tool_name": None,
+                    "tool_args": None,
+                    "start_time": None
+                }
+                self.set_stop_flag(False)
+                if callback:
+                    callback("**Execution stopped**\nProcessing was interrupted by user.")
+                else:
+                    yield "**Execution stopped**\nProcessing was interrupted by user."
+                return
+            
+            try:
+                # 准备API参数
+                api_params = {
+                    "model": self.model,
+                    "temperature": self.temperature,
+                    "messages": history,
+                    "stream": True,  # 关键：启用流式
+                    "max_tokens": self.max_tokens or 2048
+                }
+                
+                print(f"[AI] Sending stream request with {len(history)} messages (iteration {iteration + 1})")
+                
+                # 调用流式API
+                response = self.client.chat.completions.create(**api_params)
+                
+                # 处理流式响应
+                current_response = ""
+                for chunk in response:
+                    if self.get_stop_flag():
+                        break
+                    
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        current_response += content
+                        full_response += content
+                        
+                        # 发送内容
+                        if callback:
+                            callback(content)
+                        else:
+                            yield content
+                
+                print(f"[AI] Stream iteration {iteration + 1} complete: {current_response[:100]}...")
+                
+                # 检查是否AI想要执行命令
+                if current_response.startswith(self.command_start):
+                    print(f"[AI] Command detected in response: {current_response}")
+                    
+                    # 添加AI回复到历史
+                    history.append({"role": "assistant", "content": current_response})
+                    
+                    # 解析命令
+                    tokens = current_response.replace(self.command_start, "").strip().split(self.command_separator)
+                    tokens = [t.strip() for t in tokens]
+                    
+                    if len(tokens) < 1:
+                        res = "Error! Your command format is incorrect"
+                    else:
+                        func_name = tokens[0]
+                        args = tokens[1:] if len(tokens) > 1 else []
+                        
+                        # 执行函数
+                        res = self.exec_func(func_name, *args)
+                    
+                    print(f"[AI] Command execution result: {res}")
+
+                    # 添加执行结果到历史（使用自定义提示词）
+                    history.append({
+                        "role": "user",
+                        "content": self.command_execution_prompt.format(result=res)
+                    })
+
+                    iteration += 1
+
+                    # 如果执行失败，AI应该重新尝试（使用自定义重试提示词）
+                    if ("Execution failed" in res or "Error" in res) and iteration < 2:
+                        print("[AI] Command execution failed, removing failed command from history")
+                        # Remove the failed command and execution prompt from history
+                        if len(history) >= 2:
+                            history.pop()  # Remove execution prompt
+                            history.pop()  # Remove command response
+                            print(f"[AI] Removed failed command, history size now: {len(history)}")
+
+                        history.append({
+                            "role": "user",
+                            "content": self.command_retry_prompt.format(error=res)
+                        })
+                        continue
+
+                    # 如果执行成功，让AI决定是否需要继续
+                    if "Execution successful" in res:
+                        # 继续下一个迭代，但AI应该主动停止
+                        print("[AI] Command executed successfully, AI will decide next step")
+                        # 给AI一次机会决定是否继续，但限制总迭代次数
+                        if iteration >= self.max_execution_iterations:  # 使用配置的迭代次数
+                            print(f"[AI] Reached safety limit ({self.max_execution_iterations}), requesting final summary")
+                            history.append({
+                                "role": "user",
+                                "content": self.final_summary_prompt
+                            })
+                            summary_requested = True  # Mark that we've requested summary
+                            continue
+                        else:
+                            continue
+                    else:
+                        # 不是明确成功，直接请求总结（不要再继续了）
+                        print("[AI] Command execution did not succeed, requesting summary")
+                        history.append({
+                            "role": "user",
+                            "content": self.final_summary_prompt
+                        })
+                        summary_requested = True
+                        iteration += 1
+                        continue
+                        
+                else:
+                    # 没有命令执行，完成处理
+                    history.append({"role": "assistant", "content": current_response})
+
+                    # 检查是否需要总结（只在第一次请求）
+                    if iteration > 0 and not summary_requested:
+                        # 如果已经执行过命令，让AI总结结果（使用自定义总结提示词）
+                        print("[AI] Requesting final summary...")
+                        history.append({
+                            "role": "user",
+                            "content": self.final_summary_prompt
+                        })
+
+                        summary_requested = True  # Mark that we've requested summary
+                        iteration += 1
+                        continue  # 最后一次迭代获取总结
+                    else:
+                        # 已经请求过总结，或没有执行过命令，直接结束
+                        if summary_requested:
+                            print("[AI] Summary provided, completing task")
+                        break
+                        
+            except Exception as e:
+                print(f"[AI] Stream API error: {e}")
+                error_msg = f"Error in stream processing: {str(e)}"
+                
+                if callback:
+                    callback(error_msg)
+                else:
+                    yield error_msg
+                break
+        
+        # 重置状态
+        self.execution_status = {
+            "status": "idle",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": None
+        }
+
+        # CRITICAL: 将处理后的历史保存回 self.conv_his
+        # 这样下次对话时才能记住上下文
+        self.conv_his = history.copy()
+        print(f"[AI] Updated conv_his with {len(self.conv_his)} messages")
+
+        # 确保生成器正确结束（无论是否使用callback）
+        yield ""  # 确保生成器结束
+
+
+    def _process_user_inp_stream_internal(self, user_input: str, history: List[Dict], callback=None):
+        """内部流式处理方法 - 保持原始逻辑"""
+        if not user_input:
+            yield ""
+            return
+
+        max_iter = self.max_iterations
+        
+        # 检查停止标志
+        if self.get_stop_flag():
+            self.set_stop_flag(False)
+            self.execution_status = {
+                "status": "idle",
+                "tool_name": None,
+                "tool_args": None,
+                "start_time": None
+            }
+            yield "**Execution stopped**\nProcessing was interrupted by user."
+            return
+        
+        # 设置执行状态
+        self.execution_status = {
+            "status": "processing",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": datetime.now().isoformat()
+        }
+        
+        iteration = 0
+        while iteration < max_iter:
+            # 检查停止标志
+            if self.get_stop_flag():
+                print(f"[Info] Stop flag detected, stopping execution at iteration {iteration}")
+                self.execution_status = {
+                    "status": "idle",
+                    "tool_name": None,
+                    "tool_args": None,
+                    "start_time": None
+                }
+                self.set_stop_flag(False)
+                yield "**Execution stopped**\nProcessing was interrupted by user."
+                return
+            
+            try:
+                # 准备API参数
+                api_params = {
+                    "model": self.model,
+                    "temperature": self.temperature,
+                    "messages": history,
+                    "stream": True
+                }
+                
+                # 添加可选参数
+                optional_params = {
+                    "max_tokens": self.max_tokens,
+                    "top_p": self.top_p,
+                    "stop": self.stop,
+                    "presence_penalty": self.presence_penalty,
+                    "frequency_penalty": self.frequency_penalty
+                }
+                
+                for param, value in optional_params.items():
+                    if value is not None:
+                        api_params[param] = value
+                
+                print(f"[Debug] Sending stream request to API with {len(history)} messages (iteration {iteration + 1})")
+                
+                # 执行流式API调用
+                response = self.client.chat.completions.create(**api_params)
+                
+                # 收集响应
+                collected_chunks = []
+                collected_messages = []
+                
+                # 处理流式响应
+                for chunk in response:
+                    # 检查停止标志
+                    if self.get_stop_flag():
+                        self.execution_status = {
+                            "status": "idle",
+                            "tool_name": None,
+                            "tool_args": None,
+                            "start_time": None
+                        }
+                        self.set_stop_flag(False)
+                        yield "**Execution stopped**\nProcessing was interrupted by user."
+                        return
+                    
+                    if chunk.choices[0].delta.content is not None:
+                        content = chunk.choices[0].delta.content
+                        collected_chunks.append(chunk)
+                        collected_messages.append(content)
+                        
+                        # 发送实时内容
+                        if callback:
+                            callback(content)
+                        else:
+                            yield content
+                
+                # 合并收集的消息
+                full_reply = ''.join(collected_messages)
+                print(f"[Debug] Full reply received (iteration {iteration + 1}): {full_reply[:100]}..." if len(full_reply) > 100 else f"[Debug] Full reply received: {full_reply}")
+                
+                # 检查是否AI想要执行命令
+                if self.command_start in full_reply:
+                    print(f"\n[Iteration {iteration + 1}][AI requested execution] {full_reply}")
+                    
+                    # 提取命令部分
+                    if full_reply.startswith(self.command_start):
+                        command_line = full_reply
+                    else:
+                        # 从回复中提取命令
+                        start_idx = full_reply.find(self.command_start)
+                        command_line = full_reply[start_idx:].split('\n')[0].strip()
+                    
+                    # 解析命令
+                    command_text = command_line.replace(self.command_start, "").strip()
+                    tokens = command_text.split(self.command_separator)
                     tokens = [t.strip() for t in tokens]
                     
                     if len(tokens) < 1:
@@ -751,7 +1142,8 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                                 "start_time": None
                             }
                             self.set_stop_flag(False)
-                            return "**Execution stopped**\nProcessing was interrupted by user.", True
+                            yield "**Execution stopped**\nProcessing was interrupted by user."
+                            return
                         
                         # 执行函数
                         res = self.exec_func(func_name, *args)
@@ -767,9 +1159,205 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                             "start_time": None
                         }
                         self.set_stop_flag(False)
-                        return "**Execution stopped**\nProcessing was interrupted by user.", True
+                        yield "**Execution stopped**\nProcessing was interrupted by user."
+                        return
                     
                     # 添加回复和结果到对话历史
+                    history.append({"role": "assistant", "content": full_reply})
+                    history.append({
+                        "role": "user", 
+                        "content": f"Execution result: {res}\nPlease decide the next operation based on this result. If the task is complete, please summarize and tell me the result."
+                    })
+                    
+                    # 流式命令执行结果
+                    result_message = f"\n\n**Command Execution Result**\n```\n{res}\n```"
+                    
+                    # 发送结果
+                    if callback:
+                        callback(result_message)
+                    else:
+                        yield result_message
+                    
+                    iteration += 1
+                    
+                    # 如果执行成功，继续下一个迭代
+                    if "Execution successful" in res:
+                        print(f"[Info] Command executed successfully, continuing to next iteration")
+                        continue
+                    else:
+                        # 如果执行失败，AI应该重新尝试
+                        print(f"[Info] Command execution failed, AI should retry")
+                        continue
+                    
+                else:
+                    # 没有命令执行，完成处理
+                    history.append({"role": "assistant", "content": full_reply})
+                    self.execution_status = {
+                        "status": "idle",
+                        "tool_name": None,
+                        "tool_args": None,
+                        "start_time": None
+                    }
+                    return
+                    
+            except Exception as e:
+                print(f"[Error] Error processing user input: {e}")
+                
+                # 检查是否是stop导致的错误
+                if self.get_stop_flag():
+                    self.set_stop_flag(False)
+                    self.execution_status = {
+                        "status": "idle",
+                        "tool_name": None,
+                        "tool_args": None,
+                        "start_time": None
+                    }
+                    yield "**Execution stopped**\nProcessing was interrupted by user."
+                    return
+                
+                # 重置执行状态
+                self.execution_status = {
+                    "status": "idle",
+                    "tool_name": None,
+                    "tool_args": None,
+                    "start_time": None
+                }
+                
+                yield f"Error occurred during processing: {e}"
+                return
+        
+        # 达到最大迭代次数
+        self.execution_status = {
+            "status": "idle",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": None
+        }
+        
+        yield f"Reached maximum execution steps ({max_iter}), task may not be fully completed"
+    
+    # === 兼容性方法 ===
+    
+    def process_user_inp(self, user_inp, max_iter=None):
+        """兼容性方法 - 处理用户输入"""
+        if self.stream:
+            # 流式处理 - 返回生成器
+            return self._process_user_inp_stream_internal(user_inp, self.conv_his)
+        else:
+            # 非流式处理 - 返回元组
+            return self._process_user_inp_non_stream(user_inp, max_iter)
+    
+    def _process_user_inp_non_stream(self, user_inp, max_iter=None):
+        """非流式处理用户输入 - 保持原始逻辑"""
+        if not user_inp:
+            return "", False
+
+        max_iter = max_iter or self.max_iterations
+        
+        # 检查停止标志
+        if self.get_stop_flag():
+            self.set_stop_flag(False)
+            self.execution_status = {
+                "status": "idle",
+                "tool_name": None,
+                "tool_args": None,
+                "start_time": None
+            }
+            return "**Execution stopped**\nProcessing was interrupted by user.", True
+        
+        self.execution_status = {
+            "status": "processing",
+            "tool_name": None,
+            "tool_args": None,
+            "start_time": datetime.now().isoformat()
+        }
+        
+        self.conv_his.append({"role": "user", "content": user_inp})
+        
+        for step in range(max_iter):
+            if self.get_stop_flag():
+                print(f"[Info] Stop flag detected, stopping execution at step {step+1}")
+                self.execution_status = {
+                    "status": "idle",
+                    "tool_name": None,
+                    "tool_args": None,
+                    "start_time": None
+                }
+                self.set_stop_flag(False)
+                return "**Execution stopped**\nProcessing was interrupted by user.", True
+            
+            try:
+                api_params = {
+                    "model": self.model,
+                    "temperature": self.temperature,
+                    "messages": self.conv_his,
+                    "stream": False  # 非流式
+                }
+                
+                optional_params = {
+                    "max_tokens": self.max_tokens,
+                    "top_p": self.top_p,
+                    "stop": self.stop,
+                    "presence_penalty": self.presence_penalty,
+                    "frequency_penalty": self.frequency_penalty
+                }
+                
+                for param, value in optional_params.items():
+                    if value is not None:
+                        api_params[param] = value
+                
+                print(f"[Debug] Sending non-stream request to API with {len(self.conv_his)} messages")
+                
+                response = self.client.chat.completions.create(**api_params)
+                get_reply = response.choices[0].message.content
+                print(f"[Debug] Received reply: {get_reply[:100]}..." if len(get_reply) > 100 else f"[Debug] Received reply: {get_reply}")
+                
+                if self.get_stop_flag():
+                    self.execution_status = {
+                        "status": "idle",
+                        "tool_name": None,
+                        "tool_args": None,
+                        "start_time": None
+                    }
+                    self.set_stop_flag(False)
+                    return "**Execution stopped**\nProcessing was interrupted by user.", True
+                
+                if get_reply.startswith(self.command_start):
+                    print(f"\n[Step {step + 1}][AI requested execution] {get_reply}")
+                    
+                    tokens = get_reply.replace(self.command_start, "").strip().split(self.command_separator)
+                    tokens = [t.strip() for t in tokens]
+                    
+                    if len(tokens) < 1:
+                        res = "Error! Your command format is incorrect"
+                    else:
+                        func_name = tokens[0]
+                        args = tokens[1:] if len(tokens) > 1 else []
+                        
+                        if self.get_stop_flag():
+                            self.execution_status = {
+                                "status": "idle",
+                                "tool_name": None,
+                                "tool_args": None,
+                                "start_time": None
+                            }
+                            self.set_stop_flag(False)
+                            return "**Execution stopped**\nProcessing was interrupted by user.", True
+                        
+                        res = self.exec_func(func_name, *args)
+                    
+                    print(f"[Info] AI execution result: {res}")
+                    
+                    if self.get_stop_flag():
+                        self.execution_status = {
+                            "status": "idle",
+                            "tool_name": None,
+                            "tool_args": None,
+                            "start_time": None
+                        }
+                        self.set_stop_flag(False)
+                        return "**Execution stopped**\nProcessing was interrupted by user.", True
+                    
                     self.conv_his.append({"role": "assistant", "content": get_reply})
                     self.conv_his.append({
                         "role": "user", 
@@ -777,10 +1365,8 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                     })
                     
                 else:
-                    # 不需要执行命令
                     self.conv_his.append({"role": "assistant", "content": get_reply})
                     
-                    # 重置执行状态
                     self.execution_status = {
                         "status": "idle",
                         "tool_name": None,
@@ -793,7 +1379,6 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
             except Exception as e:
                 print(f"[Error] Error processing user input: {e}")
                 
-                # 检查是否是因为停止导致的异常
                 if self.get_stop_flag():
                     self.set_stop_flag(False)
                     self.execution_status = {
@@ -804,7 +1389,6 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                     }
                     return "**Execution stopped**\nProcessing was interrupted by user.", True
                 
-                # 重置执行状态
                 self.execution_status = {
                     "status": "idle",
                     "tool_name": None,
@@ -814,7 +1398,6 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
                 
                 return f"Error occurred during processing: {e}", True
         
-        # 达到最大迭代次数
         self.execution_status = {
             "status": "idle",
             "tool_name": None,
@@ -823,11 +1406,168 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
         }
         
         return f"Reached maximum execution steps ({max_iter}), task may not be fully completed", False
+    
+    # === 历史管理 ===
+    
+    def reset_conversation(self):
+        """重置对话历史"""
+        self.conv_his = [{"role": "system", "content": self.system_prompt}]
+        print("[AI] Conversation history reset")
+    
+    def load_conversation_history(self, history_messages: List[Dict]):
+        """加载对话历史到AI上下文"""
+        print(f"[AI] Loading {len(history_messages)} conversation history messages")
+        
+        # 重置对话
+        self.reset_conversation()
+        
+        # 添加历史消息到对话
+        for msg in history_messages:
+            role = "user" if msg.get("is_sender", False) else "assistant"
+            content = msg.get("text", "")
+            
+            # 跳过空消息
+            if content and content.strip():
+                self.conv_his.append({"role": role, "content": content})
+        
+        print(f"[AI] Conversation history loaded. Total messages: {len(self.conv_his)}")
+    
+    def get_current_history(self) -> List[Dict]:
+        """获取当前对话历史"""
+        return self.conv_his.copy()
+    
+    def set_current_history(self, history: List[Dict]):
+        """设置当前对话历史"""
+        self.conv_his = history.copy()
+        print(f"[AI] History set with {len(self.conv_his)} messages")
+    
+    # === 配置方法 ===
+    
+    def update_system_prompt(self, new_prompt: str):
+        """更新系统提示"""
+        self.system_prompt = new_prompt
+        for i, msg in enumerate(self.conv_his):
+            if msg.get("role") == "system":
+                self.conv_his[i]["content"] = new_prompt
+                break
+        else:
+            self.conv_his.insert(0, {"role": "system", "content": new_prompt})
+    
+    def update_config(self, config_dict: Dict):
+        """从字典更新配置，不创建新实例"""
+        print(f"[AI] Updating AI configuration for existing instance")
+        
+        # 更新API配置
+        if 'api_key' in config_dict and config_dict['api_key']:
+            self.api_key = config_dict['api_key']
+        
+        if 'api_base' in config_dict and config_dict['api_base']:
+            self.api_base = config_dict['api_base']
+        
+        if 'model' in config_dict and config_dict['model']:
+            self.model = config_dict['model']
+            
+        # 重新初始化客户端
+        if any(key in config_dict for key in ['api_key', 'api_base', 'model']):
+            self.init_ai_client()
+        
+        # 更新模型参数
+        if 'temperature' in config_dict:
+            self.temperature = config_dict['temperature']
+        
+        if 'max_tokens' in config_dict:
+            self.max_tokens = config_dict['max_tokens']
+        
+        if 'top_p' in config_dict:
+            self.top_p = config_dict['top_p']
+        
+        if 'stop' in config_dict:
+            self.stop = config_dict['stop']
+        
+        if 'stream' in config_dict:
+            self.stream = config_dict['stream']
+            print(f"[AI] Stream mode updated to: {self.stream}")
+        
+        if 'presence_penalty' in config_dict:
+            self.presence_penalty = config_dict['presence_penalty']
+        
+        if 'frequency_penalty' in config_dict:
+            self.frequency_penalty = config_dict['frequency_penalty']
+        
+        # 更新命令配置
+        if 'command_start' in config_dict:
+            self.command_start = config_dict['command_start']
+        
+        if 'command_separator' in config_dict:
+            self.command_separator = config_dict['command_separator']
+        
+        if 'max_iterations' in config_dict:
+            self.max_iterations = config_dict['max_iterations']
+        
+        # 更新系统提示
+        if 'system_prompt' in config_dict and config_dict['system_prompt']:
+            self.system_prompt = config_dict['system_prompt']
+            self.update_system_prompt(self.system_prompt)
+        
+        # 更新MCP路径并重新加载工具
+        if 'mcp_paths' in config_dict:
+            new_paths = config_dict['mcp_paths']
+            if set(new_paths) != set(self.mcp_paths):
+                print(f"[AI] MCP paths changed, reloading tools")
+                self.mcp_paths = new_paths
+                self.load_mcp_tools()
 
+        # 更新自定义提示词
+        if 'command_execution_prompt' in config_dict and config_dict['command_execution_prompt']:
+            self.command_execution_prompt = config_dict['command_execution_prompt']
 
+        if 'command_retry_prompt' in config_dict and config_dict['command_retry_prompt']:
+            self.command_retry_prompt = config_dict['command_retry_prompt']
 
-    def get_available_tools(self):
-        """Get available tools list"""
+        if 'final_summary_prompt' in config_dict and config_dict['final_summary_prompt']:
+            self.final_summary_prompt = config_dict['final_summary_prompt']
+
+        if 'max_execution_iterations' in config_dict:
+            self.max_execution_iterations = config_dict['max_execution_iterations']
+            print(f"[AI] Max execution iterations updated to: {self.max_execution_iterations}")
+
+        print(f"[AI] Configuration updated successfully, stream={self.stream}")
+    
+    def get_config(self) -> Dict:
+        """获取当前配置字典"""
+        return {
+            # API配置
+            "api_base": self.api_base,
+            "model": self.model,
+            
+            # 提示配置
+            "system_prompt": self.system_prompt,
+            
+            # 模型参数
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "top_p": self.top_p,
+            "stop": self.stop,
+            "stream": self.stream,
+            "presence_penalty": self.presence_penalty,
+            "frequency_penalty": self.frequency_penalty,
+            
+            # 命令执行配置
+            "command_start": self.command_start,
+            "command_separator": self.command_separator,
+            "max_iterations": self.max_iterations,
+            
+            # 工具配置
+            "mcp_paths": self.mcp_paths.copy(),
+            "available_tools": list(self.funcs.keys())
+        }
+    
+    def get_execution_status(self) -> Dict:
+        """获取当前执行状态用于状态栏显示"""
+        return self.execution_status.copy()
+    
+    def get_available_tools(self) -> List[Dict]:
+        """获取可用工具列表"""
         tools = []
         for func_name, func in self.funcs.items():
             doc = func.__doc__ or "No description"
@@ -835,16 +1575,16 @@ Please strictly follow these rules to ensure responses are concise, accurate, an
         return tools
     
     def print_tools_list(self):
-        """Print available tools list"""
+        """打印可用工具列表"""
         print("\nAvailable tools:")
         tools = self.get_available_tools()
         for i, tool in enumerate(tools, 1):
             print(f"{i:2}. {tool['name']}: {tool['description'][:60]}...")
 
 
-# Configuration file loading functions
-def load_config_from_file(config_path):
-    """Load configuration from file (JSON or YAML)"""
+# 配置文件加载函数
+def load_config_from_file(config_path: str) -> Optional[Dict]:
+    """从文件加载配置(JSON或YAML)"""
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             if config_path.endswith('.json'):
@@ -864,17 +1604,17 @@ def load_config_from_file(config_path):
         return None
 
 
-def create_ai_from_config(config_path):
-    """Create AI instance from config file"""
+def create_ai_from_config(config_path: str) -> Optional[AI]:
+    """从配置文件创建AI实例"""
     config = load_config_from_file(config_path)
     if not config:
         return None
     
-    # Extract configuration parameters
+    # 提取配置参数
     mcp_paths = config.get("mcp_paths", [])
     api_key = config.get("api_key")
     
-    # Create AI instance
+    # 创建AI实例
     ai = AI(
         mcp_paths=mcp_paths,
         api_key=api_key,
@@ -885,7 +1625,7 @@ def create_ai_from_config(config_path):
         max_tokens=config.get("max_tokens"),
         top_p=config.get("top_p", 1.0),
         stop=config.get("stop"),
-        stream=config.get("stream", False),
+        stream=config.get("stream", True),
         presence_penalty=config.get("presence_penalty", 0.0),
         frequency_penalty=config.get("frequency_penalty", 0.0),
         command_start=config.get("command_start", "YLDEXECUTE:"),
@@ -896,10 +1636,10 @@ def create_ai_from_config(config_path):
     return ai
 
 
-def save_config_to_file(ai_instance, config_path):
-    """Save AI instance configuration to file"""
+def save_config_to_file(ai_instance: AI, config_path: str) -> bool:
+    """将AI实例配置保存到文件"""
     config = ai_instance.get_config()
-    config["api_key"] = ai_instance.api_key  # Warning: saving API key needs caution
+    config["api_key"] = ai_instance.api_key  # 警告：保存API密钥需谨慎
     
     try:
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -911,78 +1651,59 @@ def save_config_to_file(ai_instance, config_path):
         return False
 
 
-def main():
-    """Main console interface"""
-    config_type = input("Select configuration method (1: Manual, 2: Config file): ").strip()
+if __name__ == "__main__":
+    """主控制台界面"""
+    print("Lynexus AI Assistant - Console Interface")
     
-    if config_type == "2":
-        config_path = input("Enter config file path: ").strip()
-        ai = create_ai_from_config(config_path)
-        if not ai:
-            print("Failed to load config file, using default configuration")
-            ai = AI()
-    else:
-        MCP_PATH = input("MCP file directory (supports .py or .json) (multiple files separated by spaces): ").strip()
-        mcp_paths = [p.strip() for p in MCP_PATH.split() if p.strip()]
-        
-        use_custom = input("Use custom configuration? (y/N): ").strip().lower()
-        
-        if use_custom == 'y':
-            temperature = float(input(f"Temperature (default 1.0): ") or "1.0")
-            command_start = input(f"Command start identifier (default YLDEXECUTE:): ") or "YLDEXECUTE:"
-            command_separator = input(f"Command separator (default ￥|): ") or "￥|"
-            
-            ai = AI(
-                mcp_paths=mcp_paths,
-                temperature=temperature,
-                command_start=command_start,
-                command_separator=command_separator
-            )
-        else:
-            ai = AI(mcp_paths=mcp_paths)
+    # 简单测试
+    ai = AI(stream=True)
+    
+    print(f"\nAI initialized with {len(ai.funcs)} tools")
+    print("Type 'exit' to quit, 'tools' to list tools, 'clear' to clear history")
     
     while True:
         try:
-            user_inp = input("\n>> ").strip()
-            if user_inp.lower() in ['exit', 'quit', 'bye', '退出', '再见']:
+            user_input = input("\n>> ").strip()
+            
+            if user_input.lower() in ['exit', 'quit', 'bye', '退出', '再见']:
                 print("Goodbye!")
                 break
-            if not user_inp:
+            
+            if not user_input:
                 continue
             
-            if user_inp.lower() in ['clear', '清空']:
+            if user_input.lower() in ['clear', '清空']:
                 ai.reset_conversation()
                 print("Conversation history cleared")
                 continue
             
-            if user_inp.lower() == 'config':
+            if user_input.lower() == 'tools':
+                ai.print_tools_list()
+                continue
+            
+            if user_input.lower() == 'config':
                 config = ai.get_config()
                 print("\nCurrent configuration:")
                 for key, value in config.items():
                     print(f"  {key}: {value}")
                 continue
-                
-            if user_inp.lower() == 'tools':
-                ai.print_tools_list()
-                continue
-                
-            if user_inp.lower().startswith('update '):
-                parts = user_inp[7:].split('=', 1)
-                if len(parts) == 2:
-                    key, value = parts[0].strip(), parts[1].strip()
-                    print(f"Update configuration: {key} = {value}")
-                continue
             
-            response, completed = ai.process_user_inp(user_inp)
-            if response:
-                print(f"\n[AI] {response}")
+            if ai.stream:
+                # 流式模式
+                print("\n[AI] ", end="", flush=True)
+                for chunk in ai.process_user_inp(user_input):
+                    if chunk:
+                        print(chunk, end="", flush=True)
+                print()
+            else:
+                # 非流式模式
+                response, completed = ai.process_user_inp(user_input)
+                if response:
+                    print(f"\n[AI] {response}")
             
         except KeyboardInterrupt:
-            print("\n[Error] Operation interrupted, goodbye!")
+            print("\n[Info] Operation interrupted")
             break
         except Exception as e:
             print(f"\n[Error] Error: {e}")
             continue
-
-if __name__ == "__main__":
-    main()

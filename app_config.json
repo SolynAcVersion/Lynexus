@@ -1,11 +1,11 @@
 {
   "chat_list": [
-    "general_chat",
-    "啊"
+    "new",
+    "1"
   ],
   "app_settings": {
     "window_width": 1400,
     "window_height": 900,
-    "last_active_chat": "general_chat"
+    "last_active_chat": "1"
   }
 }
