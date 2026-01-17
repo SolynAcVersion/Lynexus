@@ -47,76 +47,17 @@ Lynexus是一个**社区驱动的AI智能体平台**，使开发者能够创建�
 - **执行控制**：随时停止长时间运行的操作
 - **历史管理**：保留和加载对话历史
 
-## 🚀 快速开始
+## 📖 使用文档
 
-#### 环境要求
-- Python 3.8 或更高版本
-- AI API密钥（DeepSeek、OpenAI等）
+详细的安装、配置和使用说明，请访问我们的[文档网站](https://solynacversion.github.io/LyNexus)。
 
-#### 安装
-
-```bash
-# 克隆仓库
-git clone https://github.com/SolynAcVersion/LyNexus.git
-cd lynexus
-
-# 安装依赖
-uv pip install -r requirements.txt
-```
-
-#### 启动选项
-**选项1：从源代码运行**
-```bash
-uv run python ./main.py
-```
-
-**选项2：下载发行版（即将推出）**
-- 从[发布页面](https://github.com/SolynAcVersion/LyNexus/releases/new)下载最新发行版
-- 解压并运行 Lynexus.exe
-
-## 🛠️ 配置
-Lynexus让您完全掌控AI智能体：
-
-**模型配置**
-```python
-# 完整的参数自定义
-mcp_paths=None, 
-api_key=None,
-api_base=None,
-model=None,
-system_prompt=None,
-temperature=1.0,
-max_tokens=None,
-top_p=1.0,
-stop=None,
-stream=False,
-presence_penalty=0.0,
-frequency_penalty=0.0,
-command_start="YLDEXECUTE:",
-command_separator=￥|,
-max_iterations=15
-```
-
-#### 对话管理
-- **多个聊天会话**：每个会话都有独立的AI实例
-- **持久化历史**：聊天内容会被保存并可导出
-- **上下文保持**：AI会记住对话历史
-- **导出/导入**：分享您完整的聊天配置
-
-## 📦 一键分享工作流
-
-#### 导出您的配置
-1. 完美地配置您的AI智能体
-2. 点击“导出配置”
-3. 在我们的论坛上分享`.json`文件
-4. 帮助他人从您的工作中获益
-5. **请勿泄露您的 `.confignore` 文件**
-
-#### 导入他人的配置
-1. 浏览社区论坛
-2. 下载吸引您的配置文件
-3. 点击“导入配置”
-4. 立即使用优化过的设置
+文档包含：
+- 安装和设置
+- 配置选项
+- 使用指南
+- 分享工作流
+- 高级功能
+- 等等！
 
 ## 🤝 社区与贡献
 
@@ -151,24 +92,6 @@ lynexus/
 └── utils/               # 实用工具函数
 
 ```
-
-## 🔧 高级用法
-
-#### 自定义MCP服务器/文件
-
-1. 将MCP服务器放在`.json`文件中
-2. 准备好MCP `.py`文件
-3. 在设置中配置文件路径
-4. AI将自动发现并使用可用的工具
-
-#### 系统集成
-
-- **API密钥管理**：安全存储密钥
-- **环境变量**：使用 DEEPSEEK_API_KEY 或 OPENAI_API_KEY
-- **桌面集成**：将导出保存到桌面以便快速访问
-
-
-
 
 ## 📄 许可证
 本项目采用MPL 2.0许可证 - 有关详细信息，请参阅[许可证](https://github.com/SolynAcVersion/Lym/blob/main/LICENSE)文件。

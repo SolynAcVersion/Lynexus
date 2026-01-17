@@ -1651,36 +1651,8 @@ class ModernChatBox(QWidget):
         try:
             print(f"[ChatBox] _finalize_streaming_response called, current_stream_bubble: {self.current_stream_bubble}")
 
-            # Extract only the final summary from response_text
-            # The response_text may contain command execution results and then the final summary
-            # We only want to show the final summary to the user
-
-            # Look for the final summary pattern (it usually starts with "**")
-            if "**最终总结**" in response_text or "**Final Summary**" in response_text:
-                # Find the final summary section
-                lines = response_text.split('\n')
-                summary_start = -1
-                for i, line in enumerate(lines):
-                    if "**最终总结**" in line or "**Final Summary**" in line:
-                        summary_start = i
-                        break
-
-                if summary_start >= 0:
-                    # Extract only the summary part and preserve formatting
-                    display_text = '\n'.join(lines[summary_start:]).strip()
-                    # Ensure proper line endings
-                    display_text = display_text.replace('\n\n\n', '\n\n')
-                    print(f"[ChatBox] Extracted final summary: {display_text[:100]}...")
-                else:
-                    # No summary marker found, use the last response
-                    # Try to find the last complete section
-                    display_text = response_text.strip()
-                    # Ensure proper line endings
-                    display_text = display_text.replace('\n\n\n', '\n\n')
-            else:
-                display_text = response_text.strip()
-                # Ensure proper line endings
-                display_text = display_text.replace('\n\n\n', '\n\n')
+            # Clean and process response text
+            display_text = self._clean_response_text(response_text)
 
             if self.current_stream_bubble:
                 self.current_stream_bubble.is_streaming = False
@@ -1700,6 +1672,49 @@ class ModernChatBox(QWidget):
         except Exception as e:
             print(f"[ChatBox] Error finalizing response: {e}")
             traceback.print_exc()
+
+    def _clean_response_text(self, response_text: str) -> str:
+        """Clean response text by removing commands and duplicates"""
+        # Step 1: Remove all command lines
+        lines = response_text.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # Skip command lines
+            if 'YLDEXECUTE:' in line or line.strip().startswith('￥|'):
+                continue
+            cleaned_lines.append(line)
+
+        # Step 2: Join and split by "最终总结" to find the last one
+        text = '\n'.join(cleaned_lines)
+
+        # Find all "最终总结" occurrences
+        if '**最终总结**' in text:
+            parts = text.split('**最终总结**')
+            # Take only the last "最终总结" section
+            text = '**最终总结**' + parts[-1]
+
+        # Step 3: Clean up extra whitespace and ensure proper formatting
+        lines = text.split('\n')
+        final_lines = []
+        prev_empty = False
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped:
+                final_lines.append(stripped)
+                prev_empty = False
+            elif not prev_empty:
+                # Keep single empty lines between paragraphs
+                final_lines.append('')
+                prev_empty = True
+
+        # Step 4: Rejoin with proper line breaks
+        display_text = '\n'.join(final_lines).strip()
+
+        # Remove any trailing whitespace and ensure single newline at end
+        display_text = display_text.replace('\n\n\n', '\n\n')
+
+        return display_text
     
     def _process_non_streaming(self, context: ProcessingContext):
         """Process message without streaming"""

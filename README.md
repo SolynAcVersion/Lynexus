@@ -47,86 +47,17 @@ Lynexus is a **community-driven AI agent platform** that empowers developers to 
 - **Execution Control**: Stop long-running operations anytime
 - **History Management**: Preserve and load conversation history
 
-## 🚀 Quick Start
+## 📖 Usage Documentation
 
-#### Prerequisites
-- Python 3.8 or higher
-- AI API key (DeepSeek, OpenAI, etc.)
+For detailed installation, configuration, and usage instructions, please visit our [documentation website](https://solynacversion.github.io/LyNexus).
 
-#### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/SolynAcVersion/LyNexus.git
-cd lynexus
-
-# Install dependencies
-uv pip install -r requirements.txt
-```
-
-#### Launch Options
-**Option 1: Run from source**
-```bash
-uv run python ./main.py
-```
-**Option 2: Download release (coming soon)**
-- Download the latest release from [Releases page](https://github.com/SolynAcVersion/LyNexus/releases/new)
-
-- Extract and run Lynexus.exe
-
-## 🛠️ Configuration
-Lynexus gives you complete control over your AI agents:
-
-**Model Configuration**
-```python
-# Full parameter customization
-mcp_paths=None, 
-api_key=None,
-api_base=None,
-model=None,
-system_prompt=None,
-temperature=1.0,
-max_tokens=None,
-top_p=1.0,
-stop=None,
-stream=False,
-presence_penalty=0.0,
-frequency_penalty=0.0,
-command_start="YLDEXECUTE:",
-command_separator="￥|",
-max_iterations=15
-```
-
-#### Conversation Management
-- **Multiple Chat Sessions**: Each with independent AI instances
-
-- **Persistent History**: Chats are saved and can be exported
-
-- **Context Preservation**: AI remembers conversation history
-
-- **Export/Import**: Share your complete chat configurations
-
-## 📦 One-Click Sharing Workflow
-
-#### Export Your Setup
-1. Configure your AI agent perfectly
-
-2. Click "Export Configuration"
-
-3. Share the `.json` file on our forum
-
-4. Help others benefit from your work
-
-5. **REMEMBER DONT LEAK YOUR `.confignore` file**
-
-#### Import Others' Setups
-1. Browse the community forum
-
-2. Download a configuration that interests you
-
-3. Click "Import Configuration"
-
-4. Instantly use optimized settings
+The documentation covers:
+- Installation and setup
+- Configuration options
+- Usage guide
+- Sharing workflows
+- Advanced features
+- And much more!
 
 ## 🤝 Community & Contribution
 
@@ -168,29 +99,6 @@ lynexus/
 └── utils/               # Utility functions
 
 ```
-
-## 🔧 Advanced Usage
-
-#### Custom MCP Servers / Files
-
-1. Place MCP server in `.json` files 
-
-2. Prepare MCP `.py` files  
-
-3. Configure paths in settings
-
-4. AI will automatically discover and use available tools
-
-#### System Integration
-
-- **API Key Management**: Store keys securely
-
-- **Environment Variables**: Use DEEPSEEK_API_KEY or OPENAI_API_KEY
-
-- **Desktop Integration**: Save exports to desktop for easy access
-
-
-
 
 ## 📄 License
 This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](https://github.com/SolynAcVersion/LyNexus/blob/main/LICENSE) file for details.
